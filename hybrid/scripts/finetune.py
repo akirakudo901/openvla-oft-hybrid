@@ -23,6 +23,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from hybrid.datasets.normalize import resolve_norm_mode  # noqa: E402
 from hybrid.models.label_head import DEFAULT_NUM_LABEL_CLASSES, ChunkLabelHead  # noqa: E402
 from hybrid.training.checkpoint import save_hybrid_checkpoint  # noqa: E402
 from hybrid.training.collate import HybridActionCollator  # noqa: E402
@@ -53,6 +54,9 @@ class HybridFinetuneConfig:
     use_film: bool = False
     num_images_in_input: int = 1
     use_proprio: bool = False
+    # "quantile" maps [q01, q99] to [-1, 1]. "minmax" maps [min, max] and writes
+    # those bounds into q01/q99 so existing LIBERO unnormalization inverts them.
+    action_norm: str = "minmax"
 
     batch_size: int = 8
     learning_rate: float = 5e-4
@@ -148,6 +152,7 @@ def run_hybrid_forward(
 @draccus.wrap()
 def hybrid_finetune(cfg: HybridFinetuneConfig) -> None:
     """Fine-tune OpenVLA-OFT with LoRA, an L1 action head, and a BIO label head."""
+    resolve_norm_mode(cfg.action_norm)
     assert cfg.use_lora, "Only LoRA fine-tuning is supported. Please set --use_lora=True!"
     assert cfg.use_l1_regression and not cfg.use_diffusion, "Hybrid fine-tune is the L1 action head only."
     assert not cfg.use_film, "Hybrid fine-tune does not wrap the vision backbone with FiLM."
