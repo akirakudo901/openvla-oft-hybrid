@@ -50,6 +50,7 @@ class HybridLeRobotOFTDataset(Dataset):
         use_wrist_image: bool,
         use_proprio: bool,
         action_norm: str = NORM_QUANTILE,
+        dataset_statistics_override: dict | None = None,
     ):
         self.source = source
         self.dataset_name = dataset_name
@@ -60,14 +61,17 @@ class HybridLeRobotOFTDataset(Dataset):
         self.base_tokenizer = processor.tokenizer
         self.image_transform = processor.image_processor.apply_transform
         self._legacy_state = _legacy_efficient_state(source)
-        actions, proprios, num_trajectories = _collect_step_rows(source, legacy_state=self._legacy_state)
-        self.dataset_statistics = dataset_statistics(
-            dataset_name=dataset_name,
-            actions=actions,
-            proprios=proprios,
-            num_trajectories=num_trajectories,
-            norm_mode=self.action_norm,
-        )
+        if dataset_statistics_override is None:
+            actions, proprios, num_trajectories = _collect_step_rows(source, legacy_state=self._legacy_state)
+            self.dataset_statistics = dataset_statistics(
+                dataset_name=dataset_name,
+                actions=actions,
+                proprios=proprios,
+                num_trajectories=num_trajectories,
+                norm_mode=self.action_norm,
+            )
+        else:
+            self.dataset_statistics = dataset_statistics_override
         stats = self.dataset_statistics[dataset_name]
         self._action_stats = stats["action"]
         self._proprio_stats = stats["proprio"]
@@ -136,8 +140,31 @@ class HybridLeRobotOFTDataset(Dataset):
         return row
 
 
-def build_hybrid_lerobot_dataset(cfg, processor) -> HybridLeRobotOFTDataset:
-    """Load ``cfg.lerobot_dataset_root`` and wrap it when augmentation-ready meta exists."""
+def split_episode_ids(num_episodes: int, val_ratio: float) -> tuple[list[int], list[int]]:
+    """Hold out the last ``val_ratio`` of episodes. Keep at least one train episode."""
+    if num_episodes < 2:
+        raise ValueError(f"Validation needs at least 2 episodes, got {num_episodes}")
+    if not 0.0 < val_ratio < 1.0:
+        raise ValueError(f"val_ratio must be in (0, 1), got {val_ratio}")
+    n_val = max(1, int(round(num_episodes * val_ratio)))
+    n_val = min(n_val, num_episodes - 1)
+    split_at = num_episodes - n_val
+    return list(range(split_at)), list(range(split_at, num_episodes))
+
+
+def build_hybrid_lerobot_dataset(
+    cfg,
+    processor,
+    *,
+    episodes: list[int] | None = None,
+    dataset_statistics_override: dict | None = None,
+) -> HybridLeRobotOFTDataset:
+    """Load ``cfg.lerobot_dataset_root`` and wrap it when augmentation-ready meta exists.
+
+    ``episodes`` limits which LeRobot episodes are read. Pass the training
+    dataset's ``dataset_statistics`` as ``dataset_statistics_override`` for a
+    validation split so bounds are not refit on the held-out episodes.
+    """
     from dataset.loaders.mp_aug_ready_train_dataset import (
         is_augmentation_ready_dataset,
         wrap_mp_aug_ready_dataset,
@@ -154,6 +181,7 @@ def build_hybrid_lerobot_dataset(cfg, processor) -> HybridLeRobotOFTDataset:
     base = LeRobotDataset(
         repo_id=dataset_root.name,
         root=dataset_root,
+        episodes=episodes,
         delta_timestamps=delta_timestamps,
     )
     source = base
@@ -173,6 +201,7 @@ def build_hybrid_lerobot_dataset(cfg, processor) -> HybridLeRobotOFTDataset:
         use_wrist_image=cfg.num_images_in_input > 1,
         use_proprio=cfg.use_proprio,
         action_norm=getattr(cfg, "action_norm", NORM_QUANTILE),
+        dataset_statistics_override=dataset_statistics_override,
     )
 
 
@@ -195,6 +224,16 @@ def _read_fps(dataset_root: Path) -> float:
     with info_path.open() as handle:
         info = json.load(handle)
     return float(info["fps"])
+
+
+def count_episodes(dataset_root: Path) -> int:
+    """Episode count from ``meta/info.json``."""
+    import json
+
+    info_path = dataset_root / "meta" / "info.json"
+    with info_path.open() as handle:
+        info = json.load(handle)
+    return int(info["total_episodes"])
 
 
 def _legacy_efficient_state(source) -> bool:

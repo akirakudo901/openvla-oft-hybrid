@@ -12,18 +12,25 @@ Run from the ``openvla-oft`` repo root:
 from __future__ import annotations
 
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
 import draccus
 import torch
+import wandb
 from torch.utils.data import DataLoader
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from hybrid.datasets.lerobot_batch import build_hybrid_lerobot_dataset  # noqa: E402
+from hybrid.datasets.lerobot_batch import (  # noqa: E402
+    _dataset_root,
+    build_hybrid_lerobot_dataset,
+    count_episodes,
+    split_episode_ids,
+)
 from hybrid.datasets.normalize import resolve_norm_mode  # noqa: E402
 from hybrid.models.label_head import DEFAULT_NUM_LABEL_CLASSES, ChunkLabelHead  # noqa: E402
 from hybrid.training.checkpoint import save_hybrid_checkpoint  # noqa: E402
@@ -37,6 +44,7 @@ from prismatic.training.finetune_helpers import (  # noqa: E402
     forward_vla_batch,
     init_module,
     load_finetune_vla,
+    log_metrics_to_wandb,
     prepare_finetune_run,
     run_finetune_loop,
     wrap_ddp,
@@ -66,6 +74,10 @@ class HybridFinetuneConfig:
     num_steps_before_decay: int = 100_000
     grad_accumulation_steps: int = 1
     max_steps: int = 200_000
+    use_val_set: bool = False
+    val_ratio: float = 0.1
+    val_freq: int = 10_000
+    val_time_limit: int = 180
     save_freq: int = 10_000
     save_latest_checkpoint_only: bool = False
     resume: bool = False
@@ -91,9 +103,67 @@ class HybridFinetuneConfig:
     # fmt: on
 
 
-def _build_train_dataset(cfg: HybridFinetuneConfig, processor):
+def _build_train_dataset(cfg: HybridFinetuneConfig, processor, episodes=None):
     """Load the LeRobot export and map each window to an OFT batch."""
-    return build_hybrid_lerobot_dataset(cfg, processor)
+    return build_hybrid_lerobot_dataset(cfg, processor, episodes=episodes)
+
+
+def _build_val_dataset(cfg: HybridFinetuneConfig, processor, episodes, train_dataset):
+    """Held-out windows normalized with the training-split statistics."""
+    return build_hybrid_lerobot_dataset(
+        cfg,
+        processor,
+        episodes=episodes,
+        dataset_statistics_override=train_dataset.dataset_statistics,
+    )
+
+
+def run_hybrid_validation(
+    vla,
+    action_head,
+    label_head,
+    proprio_projector,
+    val_dataloader,
+    device_id,
+    cfg,
+    num_patches,
+    log_step,
+    distributed_state,
+) -> None:
+    """Average hybrid metrics on the held-out loader, then return the VLA to train mode."""
+    val_start_time = time.time()
+    vla.eval()
+    all_val_metrics = []
+    with torch.no_grad():
+        for batch in val_dataloader:
+            _loss, metrics = run_hybrid_forward(
+                vla=vla,
+                action_head=action_head,
+                label_head=label_head,
+                proprio_projector=proprio_projector,
+                batch=batch,
+                device_id=device_id,
+                use_proprio=cfg.use_proprio,
+                use_film=cfg.use_film,
+                num_patches=num_patches,
+                mp_l1_weight=cfg.mp_l1_weight,
+                mp_ce_weight=cfg.mp_ce_weight,
+                l_ce_weight=cfg.l_ce_weight,
+                num_label_classes=cfg.num_label_classes,
+            )
+            all_val_metrics.append(metrics)
+            if time.time() - val_start_time > cfg.val_time_limit:
+                break
+    avg_val_metrics = {}
+    if all_val_metrics:
+        for metric_name in all_val_metrics[0].keys():
+            values = [metrics[metric_name] for metrics in all_val_metrics if metric_name in metrics]
+            if values:
+                avg_val_metrics[metric_name] = sum(values) / len(values)
+    avg_val_metrics["val_batches_count"] = len(all_val_metrics)
+    if distributed_state.is_main_process:
+        log_metrics_to_wandb(avg_val_metrics, "VLA Val", log_step, wandb)
+    vla.train()
 
 
 def run_hybrid_forward(
@@ -171,7 +241,18 @@ def hybrid_finetune(cfg: HybridFinetuneConfig) -> None:
         cfg, [vla, action_head, label_head, proprio_projector]
     )
 
-    train_dataset = _build_train_dataset(cfg, processor)
+    train_episodes = None
+    val_episodes = None
+    if cfg.use_val_set:
+        dataset_root = _dataset_root(cfg.lerobot_dataset_root, cfg.dataset_name)
+        train_episodes, val_episodes = split_episode_ids(
+            count_episodes(dataset_root), cfg.val_ratio
+        )
+        print(
+            f"Validation split: {len(train_episodes)} train episodes, "
+            f"{len(val_episodes)} val episodes"
+        )
+    train_dataset = _build_train_dataset(cfg, processor, episodes=train_episodes)
     # Same early write as vla-scripts/finetune.py so the run dir has stats before the first checkpoint.
     if distributed_state.is_main_process:
         save_dataset_statistics(train_dataset.dataset_statistics, run_dir)
@@ -186,6 +267,16 @@ def hybrid_finetune(cfg: HybridFinetuneConfig) -> None:
         ),
         num_workers=cfg.num_workers,
     )
+    val_dataloader = None
+    if cfg.use_val_set:
+        val_dataset = _build_val_dataset(cfg, processor, val_episodes, train_dataset)
+        val_dataloader = DataLoader(
+            val_dataset,
+            batch_size=cfg.batch_size,
+            sampler=None,
+            collate_fn=dataloader.collate_fn,
+            num_workers=cfg.num_workers,
+        )
 
     def compute_loss(batch, _batch_idx):
         return run_hybrid_forward(
@@ -218,6 +309,20 @@ def hybrid_finetune(cfg: HybridFinetuneConfig) -> None:
             distributed_state=distributed_state,
         )
 
+    def validate(log_step):
+        run_hybrid_validation(
+            vla=vla,
+            action_head=action_head,
+            label_head=label_head,
+            proprio_projector=proprio_projector,
+            val_dataloader=val_dataloader,
+            device_id=device_id,
+            cfg=cfg,
+            num_patches=num_patches,
+            log_step=log_step,
+            distributed_state=distributed_state,
+        )
+
     vla.train()
     run_finetune_loop(
         cfg,
@@ -238,6 +343,7 @@ def hybrid_finetune(cfg: HybridFinetuneConfig) -> None:
             "label_accuracy",
         ),
         save_checkpoint=save_checkpoint,
+        validate=validate if cfg.use_val_set else None,
         cycle_loader=True,
     )
 

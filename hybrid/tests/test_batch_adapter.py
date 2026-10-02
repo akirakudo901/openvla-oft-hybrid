@@ -101,5 +101,17 @@ class HybridBatchAdapterTest(unittest.TestCase):
         self.assertFalse(bool(dataset.dataset_statistics["libero_spatial"]["action"]["mask"][-1]))
 
 
+class EpisodeSplitTest(unittest.TestCase):
+    def test_holds_out_the_tail_and_keeps_a_train_episode(self) -> None:
+        from hybrid.datasets.lerobot_batch import split_episode_ids
+
+        train_ids, val_ids = split_episode_ids(10, 0.1)
+        self.assertEqual(train_ids, list(range(9)))
+        self.assertEqual(val_ids, [9])
+        train_ids, val_ids = split_episode_ids(2, 0.9)
+        self.assertEqual(train_ids, [0])
+        self.assertEqual(val_ids, [1])
+
+
 if __name__ == "__main__":
     unittest.main()
