@@ -43,8 +43,6 @@ def save_hybrid_checkpoint(
     distributed_state,
 ) -> None:
     """Save the upstream LoRA / action-head checkpoint, then the label head."""
-    if not hasattr(train_dataset, "dataset_statistics"):
-        train_dataset.dataset_statistics = {}
     save_training_checkpoint(
         cfg=cfg,
         run_dir=run_dir,

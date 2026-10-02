@@ -23,11 +23,13 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from hybrid.datasets.lerobot_batch import build_hybrid_lerobot_dataset  # noqa: E402
 from hybrid.datasets.normalize import resolve_norm_mode  # noqa: E402
 from hybrid.models.label_head import DEFAULT_NUM_LABEL_CLASSES, ChunkLabelHead  # noqa: E402
 from hybrid.training.checkpoint import save_hybrid_checkpoint  # noqa: E402
 from hybrid.training.collate import HybridActionCollator  # noqa: E402
 from hybrid.training.loss import LABEL_FEATURE_KEY, compute_hybrid_loss  # noqa: E402
+from prismatic.vla.datasets.rlds.utils.data_utils import save_dataset_statistics  # noqa: E402
 from prismatic.training.finetune_helpers import (  # noqa: E402
     build_finetune_heads,
     build_finetune_optimizer,
@@ -90,15 +92,7 @@ class HybridFinetuneConfig:
 
 
 def _build_train_dataset(cfg: HybridFinetuneConfig, processor):
-    """Load the LeRobot to OFT dataset from the adapter module."""
-    try:
-        from hybrid.datasets.lerobot_batch import build_hybrid_lerobot_dataset
-    except ImportError as exc:
-        raise ImportError(
-            "hybrid.datasets.lerobot_batch.build_hybrid_lerobot_dataset is not available yet. "
-            "The fine-tune loop expects samples with OFT keys plus "
-            f"{LABEL_FEATURE_KEY!r} and optional is_pad."
-        ) from exc
+    """Load the LeRobot export and map each window to an OFT batch."""
     return build_hybrid_lerobot_dataset(cfg, processor)
 
 
@@ -178,6 +172,9 @@ def hybrid_finetune(cfg: HybridFinetuneConfig) -> None:
     )
 
     train_dataset = _build_train_dataset(cfg, processor)
+    # Same early write as vla-scripts/finetune.py so the run dir has stats before the first checkpoint.
+    if distributed_state.is_main_process:
+        save_dataset_statistics(train_dataset.dataset_statistics, run_dir)
     dataloader = DataLoader(
         train_dataset,
         batch_size=cfg.batch_size,
