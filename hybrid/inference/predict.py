@@ -25,6 +25,7 @@ def predict(
     unnorm_key: str | None = None,
     proprio=None,
     proprio_projector: nn.Module | None = None,
+    use_film: bool = False,
 ) -> tuple[Tensor, Tensor]:
     """Return ``(actions, labels)`` with shapes ``(B, k, action_dim)`` and ``(B, k)``.
 
@@ -42,7 +43,7 @@ def predict(
         proprio=proprio,
         proprio_projector=proprio_module,
         action_head=action_module,
-        use_film=False,
+        use_film=use_film,
         pixel_values=pixel_values,
         attention_mask=attention_mask,
     )

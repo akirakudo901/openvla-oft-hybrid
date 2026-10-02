@@ -105,6 +105,7 @@ def run_hybrid_forward(
     device_id: int,
     *,
     use_proprio: bool,
+    use_film: bool,
     num_patches: int,
     mp_l1_weight: float,
     mp_ce_weight: float,
@@ -117,7 +118,7 @@ def run_hybrid_forward(
         batch,
         device_id,
         use_proprio=use_proprio,
-        use_film=False,
+        use_film=use_film,
         proprio_projector=proprio_projector,
     )
     actions_hidden_states = continuous_action_hidden_states(output, batch, device_id, num_patches)
@@ -149,7 +150,6 @@ def hybrid_finetune(cfg: HybridFinetuneConfig) -> None:
     resolve_norm_mode(cfg.action_norm)
     assert cfg.use_lora, "Only LoRA fine-tuning is supported. Please set --use_lora=True!"
     assert cfg.use_l1_regression and not cfg.use_diffusion, "Hybrid fine-tune is the L1 action head only."
-    assert not cfg.use_film, "Hybrid fine-tune does not wrap the vision backbone with FiLM."
 
     run_dir, distributed_state, device_id = prepare_finetune_run(
         cfg, banner="Hybrid fine-tuning OpenVLA", wandb_name_prefix="hybrid+"
@@ -196,6 +196,7 @@ def hybrid_finetune(cfg: HybridFinetuneConfig) -> None:
             batch=batch,
             device_id=device_id,
             use_proprio=cfg.use_proprio,
+            use_film=cfg.use_film,
             num_patches=num_patches,
             mp_l1_weight=cfg.mp_l1_weight,
             mp_ce_weight=cfg.mp_ce_weight,
