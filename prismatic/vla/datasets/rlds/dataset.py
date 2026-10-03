@@ -15,9 +15,13 @@ import numpy as np
 import tensorflow as tf
 import tensorflow_datasets as tfds
 
+# Never query Google Cloud Storage for dataset info (unreachable on some clusters, where TFDS retries for ~30 min)
+tfds.core.utils.gcs_utils._is_gcs_disabled = True
+
 from prismatic.overwatch import initialize_overwatch
 from prismatic.vla.constants import ACTION_DIM, ACTION_PROPRIO_NORMALIZATION_TYPE, ACTION_TOKEN_BEGIN_IDX, IGNORE_INDEX, NUM_ACTIONS_CHUNK, PROPRIO_DIM, STOP_INDEX
 from prismatic.vla.datasets.rlds import obs_transforms, traj_transforms
+from prismatic.vla.datasets.rlds.streaming import make_streaming_rlds_dataset
 from prismatic.vla.datasets.rlds.utils import goal_relabeling, task_augmentation
 from prismatic.vla.datasets.rlds.utils.data_utils import (
     allocate_threads,
@@ -53,6 +57,8 @@ def make_dataset_from_rlds(
     action_normalization_mask: Optional[List[bool]] = None,
     num_parallel_reads: int = tf.data.AUTOTUNE,
     num_parallel_calls: int = tf.data.AUTOTUNE,
+    stream_window_dir: Optional[str] = None,
+    stream_statistics_path: Optional[str] = None,
 ) -> Tuple[dl.DLataset, dict]:
     """
     This function is responsible for loading a specific RLDS dataset from storage and getting it into a standardized
@@ -199,7 +205,15 @@ def make_dataset_from_rlds(
 
         return traj
 
-    builder = tfds.builder(name, data_dir=data_dir)
+    if stream_window_dir is None:
+        builder = tfds.builder(name, data_dir=data_dir)
+    else:
+        # Rolling-window stream (see streaming.py): the data changes during training, so statistics are precomputed
+        builder = None
+        if dataset_statistics is None:
+            if stream_statistics_path is None:
+                raise ValueError(f"Streaming dataset `{name}` needs precomputed statistics (stream_statistics_path)")
+            dataset_statistics = stream_statistics_path
 
     # load or compute dataset statistics
     if isinstance(dataset_statistics, str):
@@ -233,7 +247,12 @@ def make_dataset_from_rlds(
     # construct the dataset
     split = "train" if train else "val"
 
-    dataset = dl.DLataset.from_rlds(builder, split=split, shuffle=shuffle, num_parallel_reads=num_parallel_reads)
+    if stream_window_dir is None:
+        dataset = dl.DLataset.from_rlds(builder, split=split, shuffle=shuffle, num_parallel_reads=num_parallel_reads)
+    elif train:
+        dataset = make_streaming_rlds_dataset(stream_window_dir, split=split)
+    else:
+        raise ValueError(f"Streaming dataset `{name}` has no validation split")
 
     dataset = dataset.traj_map(restructure, num_parallel_calls)
     dataset = dataset.traj_map(

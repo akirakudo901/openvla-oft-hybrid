@@ -19,6 +19,7 @@ from typing import Any, Dict
 
 import tensorflow as tf
 
+from prismatic.vla.datasets.rlds.oxe.configs import MOLMOBOT_DATASET_NAMES
 from prismatic.vla.datasets.rlds.oxe.utils.droid_utils import droid_baseact_transform, droid_finetuning_transform
 from prismatic.vla.datasets.rlds.utils.data_utils import (
     binarize_gripper_actions,
@@ -846,6 +847,11 @@ def aloha_dataset_transform(trajectory: Dict[str, Any]) -> Dict[str, Any]:
     return trajectory
 
 
+def molmobot_dataset_transform(trajectory: Dict[str, Any]) -> Dict[str, Any]:
+    # Converter already writes state (7 joints + gripper [0, 1]) and action (7 abs joints + gripper {0, 1})
+    return trajectory
+
+
 # === Registry ===
 OXE_STANDARDIZATION_TRANSFORMS = {
     "bridge_oxe": bridge_oxe_dataset_transform,
@@ -931,3 +937,7 @@ OXE_STANDARDIZATION_TRANSFORMS = {
     "aloha1_scoop_X_into_bowl_45_demos": aloha_dataset_transform,
     "aloha1_put_X_into_pot_300_demos": aloha_dataset_transform,
 }
+
+# === MolmoBot-Data (MolmoSpaces Franka) ===
+for _name in MOLMOBOT_DATASET_NAMES:
+    OXE_STANDARDIZATION_TRANSFORMS[_name] = molmobot_dataset_transform

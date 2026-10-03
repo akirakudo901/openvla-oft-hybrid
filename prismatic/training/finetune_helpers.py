@@ -616,6 +616,11 @@ def run_finetune_loop(
     # Deque to store recent train metrics (used for computing smoothened metrics for gradient accumulation)
     recent_metrics = {name: deque(maxlen=cfg.grad_accumulation_steps) for name in metric_names}
 
+    # Rolling-window data stream: tell the producer how far training is
+    # (experiments/robot/molmospaces/data/stream_producer.py)
+    stream_dir = os.environ.get("MOLMOBOT_STREAM_DIR")
+    trainer_step_path = os.path.join(stream_dir, "trainer_step.txt") if stream_dir else None
+
     # Start training
     with tqdm.tqdm(total=cfg.max_steps, leave=False) as progress:
         optimizer.zero_grad()
@@ -668,6 +673,11 @@ def run_finetune_loop(
                 scheduler.step()
                 optimizer.zero_grad()
                 progress.update()
+                if trainer_step_path and distributed_state.is_main_process and log_step % 50 == 0:
+                    global_batch = cfg.batch_size * cfg.grad_accumulation_steps * distributed_state.num_processes
+                    with open(trainer_step_path + ".tmp", "w") as f:
+                        f.write(f"{log_step} {global_batch}")
+                    os.replace(trainer_step_path + ".tmp", trainer_step_path)
 
             # Save model checkpoint: either keep latest checkpoint only or all checkpoints
             if gradient_step_idx > 0 and log_step % cfg.save_freq == 0:

@@ -1,0 +1,13 @@
+# pip constraints for the `oft` env: keep OpenVLA-OFT's torch 2.2 / TF 2.15 stack fixed while installing extras
+torch==2.2.0
+torchvision==0.17.0
+torchaudio==2.2.0
+tensorflow==2.15.0
+tensorflow_datasets==4.9.3
+tensorflow_metadata==1.14.0
+protobuf==3.20.3
+numpy<2
+huggingface_hub>=0.23.2,<0.26
+accelerate>=0.25.0,<0.35
+tokenizers==0.19.1
+pyarrow<18
