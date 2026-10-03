@@ -24,6 +24,7 @@ Configuration adopts the following structure:
     action_encoding: Type of action encoding (e.g., EEF Position vs. Joint Position)
 """
 
+import os
 from enum import IntEnum
 
 from prismatic.vla.datasets.rlds.oxe.utils.droid_utils import zero_action_filter
@@ -47,6 +48,7 @@ class ActionEncoding(IntEnum):
     JOINT_POS = 2           # Joint Delta Position (7) + Gripper Open/Close (1)
     JOINT_POS_BIMANUAL = 3  # Joint Delta Position (2 x [ Joint Delta Position (6) + Gripper Open/Close (1) ])
     EEF_R6 = 4              # EEF Delta XYZ (3) + R6 (6) + Gripper Open/Close (1)
+    JOINT_POS_ABS = 5       # Absolute Joint Position (7) + Gripper Open/Close (1)
     # fmt: on
 
 
@@ -706,4 +708,24 @@ OXE_DATASET_CONFIGS = {
         "state_encoding": StateEncoding.JOINT_BIMANUAL,
         "action_encoding": ActionEncoding.JOINT_POS_BIMANUAL,
     },
+}
+
+
+# === MolmoBot-Data (MolmoSpaces Franka) ===
+# Converted by experiments/robot/molmospaces/data/convert_molmobot_to_rlds.py; register each converted dataset name here.
+MOLMOBOT_DATASET_NAMES = ("molmobot_pick_dev", "molmobot_pick_stream")
+for _name in MOLMOBOT_DATASET_NAMES:
+    OXE_DATASET_CONFIGS[_name] = {
+        "image_obs_keys": {"primary": "image", "secondary": None, "wrist": "wrist_image"},
+        "depth_obs_keys": {"primary": None, "secondary": None, "wrist": None},
+        "state_obs_keys": ["state"],
+        "state_encoding": StateEncoding.JOINT,
+        "action_encoding": ActionEncoding.JOINT_POS_ABS,
+    }
+
+# Rolling window of converted shards, refreshed during training by experiments/robot/molmospaces/data/stream_producer.py
+_stream_dir = os.environ.get("MOLMOBOT_STREAM_DIR")
+OXE_DATASET_CONFIGS["molmobot_pick_stream"]["aux_kwargs"] = {
+    "stream_window_dir": _stream_dir,
+    "stream_statistics_path": os.path.join(_stream_dir, "dataset_statistics.json") if _stream_dir else None,
 }
