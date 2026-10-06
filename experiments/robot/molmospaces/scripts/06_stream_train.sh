@@ -37,7 +37,14 @@ else
 fi
 
 # ---- 2. wait for a full window, then fix the normalization statistics ---------------------------------------
-live_count() { python -c "from prismatic.vla.datasets.rlds.streaming import list_live_datasets as l; print(len(l('$STREAM_DIR')))" 2>/dev/null; }
+# Same rule as streaming.list_live_datasets, in plain bash (importing prismatic prints a constants banner)
+live_count() {
+  local n=0 d
+  for d in "$STREAM_DIR"/active/*/; do
+    if [[ -d "$d" && ! -e "$d/RETIRED" ]]; then n=$((n + 1)); fi
+  done
+  echo "$n"
+}
 until [[ "$(live_count)" -ge "$WINDOW_SIZE" ]]; do
   kill -0 "$(cat "$PRODUCER_PID_FILE")" 2>/dev/null \
     || { echo "ERROR: producer died; see $STREAM_DIR/producer.log" >&2; tail -20 "$STREAM_DIR/producer.log" >&2; exit 1; }

@@ -25,7 +25,10 @@ WS="$OLD_WS"
 cd "$WS"
 
 # ---- 2. new layout --------------------------------------------------------------------------------------------
-move() {  # move <src> <dst>: only if src exists and dst does not
+move() {  # move <src> <dst>: only if src exists and dst does not (an empty dst dir, e.g. made by common.sh, is replaced)
+  if [[ -d "$2" && -z "$(ls -A "$2")" ]]; then
+    rmdir "$2"
+  fi
   if [[ -e "$1" && ! -e "$2" ]]; then
     mkdir -p "$(dirname "$2")"
     mv "$1" "$2"
@@ -34,6 +37,8 @@ move() {  # move <src> <dst>: only if src exists and dst does not
 }
 move mbdata data/raw
 move rlds data/rlds
+move stream_pick_smoke data/streams/pick_smoke
+move stream_pick data/streams/pick
 move eval_output eval
 move hf_home cache/hf_home
 move wandb cache/wandb
